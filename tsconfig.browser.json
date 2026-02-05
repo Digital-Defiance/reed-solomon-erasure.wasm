@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "outDir": "browser",
+    "declaration": false,
+    "declarationMap": false,
+    "types": []
+  },
+  "include": ["src/browser.ts"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

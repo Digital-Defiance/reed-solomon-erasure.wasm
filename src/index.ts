@@ -1,18 +1,52 @@
-import {readFileSync} from "fs";
+/**
+ * Reed-Solomon Erasure Coding WASM Library
+ * 
+ * Browser and Node.js compatible implementation.
+ * 
+ * @packageDocumentation
+ * @module @digitaldefiance/reed-solomon-erasure.wasm
+ */
 
 interface IWasm {
     memory: WebAssembly.Memory;
-
     encode(shardsPointer: number, shardsLength: number, dataShards: number, parityShards: number): number;
-
     reconstruct(shardsPointer: number, shardsLength: number, dataShards: number, parityShards: number, e: number, f: number): number;
-
     __wbindgen_malloc(length: number): number;
-
     __wbindgen_free(pointer: number, length: number): void;
 }
 
-const currentScript = globalThis.document && globalThis.document.currentScript as HTMLScriptElement | undefined;
+// Detect browser environment - check for currentScript at module load time
+const currentScript = typeof globalThis !== 'undefined' && 
+    globalThis.document && 
+    (globalThis.document.currentScript as HTMLScriptElement | undefined);
+
+// Check if we're in a browser environment
+const isBrowser = typeof window !== 'undefined' || typeof self !== 'undefined';
+
+// Cached singleton instance
+let cachedInstance: ReedSolomonErasure | null = null;
+let loadingPromise: Promise<ReedSolomonErasure> | null = null;
+
+/**
+ * Load WASM bytes in Node.js environment using dynamic import
+ * This avoids the top-level fs import that breaks browser bundlers
+ */
+async function loadWasmBytesNode(wasmPath: string): Promise<Uint8Array> {
+    // Dynamic import to avoid bundler issues
+    const fs = await import('fs');
+    return fs.readFileSync(wasmPath);
+}
+
+/**
+ * Synchronously load WASM bytes in Node.js environment
+ * Only call this in Node.js - will throw in browser
+ */
+function loadWasmBytesSyncNode(wasmPath: string): Uint8Array {
+    // Use require for synchronous loading in Node.js
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    return fs.readFileSync(wasmPath);
+}
 
 export class ReedSolomonErasure {
     public static readonly RESULT_OK = 0;
@@ -30,50 +64,182 @@ export class ReedSolomonErasure {
     public static readonly RESULT_ERROR_INVALID_SHARD_FLAGS = 12;
     public static readonly RESULT_ERROR_INVALID_INDEX = 13;
 
+    private memoryCache: Uint8Array | null = null;
+
+    private constructor(private readonly exports: IWasm) {}
+
     /**
-     * Automagical method that will try to detect environment (Node.js or browser) and load *.wasm file from current directory
+     * Get or create a singleton instance.
+     * Useful for applications that only need one encoder.
+     * 
+     * @param wasmUrl - URL to the WASM file (browser) or path (Node.js)
+     */
+    public static async getInstance(wasmUrl?: string): Promise<ReedSolomonErasure> {
+        if (cachedInstance) {
+            return cachedInstance;
+        }
+        
+        if (loadingPromise) {
+            return loadingPromise;
+        }
+
+        if (wasmUrl) {
+            if (isBrowser) {
+                loadingPromise = ReedSolomonErasure.fromResponse(fetch(wasmUrl));
+            } else {
+                loadingPromise = loadWasmBytesNode(wasmUrl).then(bytes => 
+                    ReedSolomonErasure.fromBytes(bytes)
+                );
+            }
+        } else {
+            loadingPromise = ReedSolomonErasure.fromCurrentDirectory();
+        }
+        
+        cachedInstance = await loadingPromise;
+        loadingPromise = null;
+        
+        return cachedInstance;
+    }
+
+    /**
+     * Clear the singleton instance (useful for testing or memory management).
+     */
+    public static clearInstance(): void {
+        cachedInstance = null;
+        loadingPromise = null;
+    }
+
+    /**
+     * Automagical method that will try to detect environment (Node.js or browser) 
+     * and load *.wasm file from current directory.
+     * 
+     * In browser: Uses fetch() to load the WASM file relative to the current script
+     * In Node.js: Uses fs.readFileSync() to load from __dirname
      */
     public static async fromCurrentDirectory(): Promise<ReedSolomonErasure> {
-        if (currentScript) {
+        if (isBrowser && currentScript) {
+            // Browser with script tag
             const pathToCurrentScript = currentScript.src.split('/').slice(0, -1).join('/');
             return ReedSolomonErasure.fromResponse(fetch(`${pathToCurrentScript}/reed_solomon_erasure_bg.wasm`));
+        } else if (isBrowser) {
+            // Browser without currentScript (e.g., bundled) - try relative path
+            return ReedSolomonErasure.fromResponse(fetch('./reed_solomon_erasure_bg.wasm'));
         } else {
-            return ReedSolomonErasure.fromBytes(readFileSync(`${__dirname}/reed_solomon_erasure_bg.wasm`));
+            // Node.js environment - use dynamic import to avoid bundler issues
+            const wasmBytes = await loadWasmBytesNode(`${__dirname}/reed_solomon_erasure_bg.wasm`);
+            return ReedSolomonErasure.fromBytes(wasmBytes);
         }
     }
 
     /**
-     * For asynchronous instantiation, primarily in Browser environment, expects you to load WASM file with `fetch()`
+     * For asynchronous instantiation, primarily in Browser environment.
+     * Expects you to load WASM file with `fetch()`.
+     * 
+     * @param source - A Response or Promise<Response> from fetch()
+     * @returns Promise resolving to ReedSolomonErasure instance
+     * 
+     * @example
+     * ```typescript
+     * const rs = await ReedSolomonErasure.fromResponse(
+     *   fetch('/path/to/reed_solomon_erasure_bg.wasm')
+     * );
+     * ```
      */
     public static async fromResponse(source: Response | Promise<Response>): Promise<ReedSolomonErasure> {
-        // @ts-ignore WebAssembly.instantiateStreaming is not known by TypeScript yet
-        const {instance}: {instance: WebAssembly.Instance} = await WebAssembly.instantiateStreaming(source);
-        return new ReedSolomonErasure(instance.exports as IWasm);
+        const response = await source;
+        
+        // Check if instantiateStreaming is available (not in all environments)
+        if (typeof WebAssembly.instantiateStreaming === 'function') {
+            try {
+                const { instance } = await WebAssembly.instantiateStreaming(
+                    response.clone()
+                );
+                return new ReedSolomonErasure(instance.exports as unknown as IWasm);
+            } catch {
+                // Fall back to arrayBuffer method if streaming fails
+            }
+        }
+        
+        // Fallback: load as ArrayBuffer
+        const bytes = await response.arrayBuffer();
+        return ReedSolomonErasure.fromBytes(bytes);
     }
 
     /**
-     * For synchronous instantiation, primarily in Node.js environment
+     * For synchronous instantiation from raw bytes.
+     * Works in both Node.js and Browser environments.
+     * 
+     * @param bytes - The WASM binary as BufferSource (ArrayBuffer, Uint8Array, etc.)
+     * @returns ReedSolomonErasure instance
+     * 
+     * @example
+     * ```typescript
+     * // Node.js
+     * const wasmBytes = fs.readFileSync('./reed_solomon_erasure_bg.wasm');
+     * const rs = ReedSolomonErasure.fromBytes(wasmBytes);
+     * 
+     * // Browser (after fetching)
+     * const response = await fetch('./reed_solomon_erasure_bg.wasm');
+     * const bytes = await response.arrayBuffer();
+     * const rs = ReedSolomonErasure.fromBytes(bytes);
+     * ```
      */
-    public static fromBytes(bytes: BufferSource): ReedSolomonErasure {
-        const module = new WebAssembly.Module(bytes);
+    public static fromBytes(bytes: BufferSource | Uint8Array): ReedSolomonErasure {
+        const module = new WebAssembly.Module(bytes as BufferSource);
         const instance = new WebAssembly.Instance(module);
-        return new ReedSolomonErasure(instance.exports as IWasm);
-    }
-
-    private memoryCache: Uint8Array | null = null;
-
-    private constructor(private readonly exports: IWasm) {
+        return new ReedSolomonErasure(instance.exports as unknown as IWasm);
     }
 
     /**
-     * Takes a contiguous array of bytes that contain space for `data_shards + parity_shards` shards with `data_shards` shards containing data and fills
-     * additional `parity_shards` with parity information that can be later used to reconstruct data in case of corruption
+     * Synchronous factory for Node.js environment only.
+     * Loads WASM from the package's dist directory.
+     * 
+     * @throws Error if called in browser environment
+     * @returns ReedSolomonErasure instance
+     * 
+     * @example
+     * ```typescript
+     * // Node.js only
+     * const rs = ReedSolomonErasure.fromCurrentDirectorySync();
+     * ```
+     */
+    public static fromCurrentDirectorySync(): ReedSolomonErasure {
+        if (isBrowser) {
+            throw new Error(
+                'fromCurrentDirectorySync() is not available in browser. ' +
+                'Use fromCurrentDirectory() or fromResponse() instead.'
+            );
+        }
+        const wasmBytes = loadWasmBytesSyncNode(`${__dirname}/reed_solomon_erasure_bg.wasm`);
+        return ReedSolomonErasure.fromBytes(wasmBytes);
+    }
+
+    /**
+     * Takes a contiguous array of bytes that contain space for `data_shards + parity_shards` 
+     * shards with `data_shards` shards containing data and fills additional `parity_shards` 
+     * with parity information that can be later used to reconstruct data in case of corruption.
      *
-     * @param shards
-     * @param dataShards
-     * @param parityShards
+     * @param shards - Contiguous byte array with space for all shards
+     * @param dataShards - Number of data shards
+     * @param parityShards - Number of parity shards to generate
      *
      * @returns One of `RESULT_*` constants; if `RESULT_OK` then parity shards were updated in `shards` in-place
+     * 
+     * @example
+     * ```typescript
+     * const dataShards = 4;
+     * const parityShards = 2;
+     * const shardSize = 1024;
+     * const totalSize = shardSize * (dataShards + parityShards);
+     * 
+     * const shards = new Uint8Array(totalSize);
+     * // Fill first 4 shards with data...
+     * 
+     * const result = rs.encode(shards, dataShards, parityShards);
+     * if (result === ReedSolomonErasure.RESULT_OK) {
+     *   // Parity shards are now filled in
+     * }
+     * ```
      */
     public encode(shards: Uint8Array, dataShards: number, parityShards: number): number {
         const exports = this.exports;
@@ -98,16 +264,30 @@ export class ReedSolomonErasure {
     }
 
     /**
-     * Takes a contiguous array of bytes that contain `data_shards + parity_shards` shards and tries to reconstruct data shards if they are broken and whenever
-     * possible using information from `shards_available` (contains `data_shards + parity_shards` boolean values, each of which is either `true` if shard is not
-     * corrupted or `false` if it is)
+     * Takes a contiguous array of bytes that contain `data_shards + parity_shards` shards 
+     * and tries to reconstruct data shards if they are broken and whenever possible using 
+     * information from `shardsAvailable`.
      *
-     * @param shards
-     * @param dataShards
-     * @param parityShards
-     * @param shardsAvailable
+     * @param shards - Contiguous byte array containing all shards
+     * @param dataShards - Number of data shards
+     * @param parityShards - Number of parity shards
+     * @param shardsAvailable - Array of booleans indicating which shards are valid (true) or corrupted (false)
      *
      * @returns One of `RESULT_*` constants; if `RESULT_OK` then data shards were reconstructed in `shards` in-place
+     * 
+     * @example
+     * ```typescript
+     * const dataShards = 4;
+     * const parityShards = 2;
+     * 
+     * // Simulate corruption of shards 1 and 2
+     * const shardsAvailable = [true, false, false, true, true, true];
+     * 
+     * const result = rs.reconstruct(shards, dataShards, parityShards, shardsAvailable);
+     * if (result === ReedSolomonErasure.RESULT_OK) {
+     *   // Data shards are now reconstructed
+     * }
+     * ```
      */
     public reconstruct(shards: Uint8Array, dataShards: number, parityShards: number, shardsAvailable: boolean[]): number {
         const exports = this.exports;
@@ -145,6 +325,50 @@ export class ReedSolomonErasure {
         return result;
     }
 
+    /**
+     * Get human-readable description for a result code.
+     * 
+     * @param code - Result code from encode() or reconstruct()
+     * @returns Human-readable error message
+     */
+    public static getResultMessage(code: number): string {
+        const messages: Record<number, string> = {
+            0: 'OK',
+            1: 'Too few shards',
+            2: 'Too many shards',
+            3: 'Too few data shards',
+            4: 'Too many data shards',
+            5: 'Too few parity shards',
+            6: 'Too many parity shards',
+            7: 'Too few buffer shards',
+            8: 'Too many buffer shards',
+            9: 'Incorrect shard size',
+            10: 'Too few shards present for reconstruction',
+            11: 'Empty shard',
+            12: 'Invalid shard flags',
+            13: 'Invalid index',
+        };
+        return messages[code] || `Unknown error code: ${code}`;
+    }
+
+    /**
+     * Load WASM from a base64-encoded string.
+     * Useful for embedding WASM directly in JavaScript bundles.
+     * 
+     * @param base64 - Base64-encoded WASM binary
+     */
+    public static fromBase64(base64: string): ReedSolomonErasure {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return ReedSolomonErasure.fromBytes(bytes);
+    }
+
+    /**
+     * Get the Uint8Array view of WASM memory, with caching for performance.
+     */
     private getUint8Memory(): Uint8Array {
         let cachegetUint8Memory = this.memoryCache;
         if (
@@ -157,3 +381,7 @@ export class ReedSolomonErasure {
         return cachegetUint8Memory;
     }
 }
+
+
+// Default export for convenience
+export default ReedSolomonErasure;
