@@ -22,16 +22,33 @@ npm install @digitaldefiance/reed-solomon-erasure.wasm
 
 ### Browser
 
+Bundlers like Vite, Webpack, and Rollup will automatically resolve to the browser build (no `fs` dependency) via the `"browser"` condition in `package.json` exports.
+
 ```typescript
 import { ReedSolomonErasure } from '@digitaldefiance/reed-solomon-erasure.wasm';
 
-// Load WASM asynchronously (recommended for browser)
+// Singleton pattern (recommended) - auto-loads WASM via fetch
+const rs = await ReedSolomonErasure.getInstance();
+
+// Or specify a custom WASM URL
+const rs = await ReedSolomonErasure.getInstance('/assets/reed_solomon_erasure_bg.wasm');
+
+// Or load from a fetch Response
 const rs = await ReedSolomonErasure.fromResponse(
   fetch('/path/to/reed_solomon_erasure_bg.wasm')
 );
 
-// Or use auto-detection (works if WASM is in same directory as script)
-const rs = await ReedSolomonErasure.fromCurrentDirectory();
+// Or load from a URL directly
+const rs = await ReedSolomonErasure.fromUrl('/path/to/reed_solomon_erasure_bg.wasm');
+
+// Or load from a base64-encoded string
+const rs = ReedSolomonErasure.fromBase64(wasmBase64String);
+```
+
+You can also import the browser build explicitly:
+
+```typescript
+import { ReedSolomonErasure } from '@digitaldefiance/reed-solomon-erasure.wasm/browser';
 ```
 
 ### Node.js
@@ -39,7 +56,10 @@ const rs = await ReedSolomonErasure.fromCurrentDirectory();
 ```typescript
 import { ReedSolomonErasure } from '@digitaldefiance/reed-solomon-erasure.wasm';
 
-// Async loading (recommended)
+// Singleton pattern (recommended)
+const rs = await ReedSolomonErasure.getInstance();
+
+// Or async loading from current directory
 const rs = await ReedSolomonErasure.fromCurrentDirectory();
 
 // Or sync loading (Node.js only)
@@ -97,12 +117,17 @@ if (result === ReedSolomonErasure.RESULT_OK) {
 
 ### Static Methods
 
-| Method | Description |
-|--------|-------------|
-| `fromCurrentDirectory()` | Auto-detect environment and load WASM from package directory |
-| `fromCurrentDirectorySync()` | Synchronous loading (Node.js only) |
-| `fromResponse(source)` | Load from fetch Response (browser) |
-| `fromBytes(bytes)` | Load from raw WASM bytes |
+| Method | Environment | Description |
+|--------|-------------|-------------|
+| `getInstance(wasmUrl?)` | Both | Get or create a singleton instance (recommended) |
+| `clearInstance()` | Both | Clear the cached singleton instance |
+| `fromUrl(url)` | Browser | Load WASM from a URL using fetch |
+| `fromResponse(source)` | Browser | Load from fetch `Response` or `Promise<Response>` |
+| `fromCurrentDirectory()` | Both | Auto-detect environment and load WASM from package directory |
+| `fromCurrentDirectorySync()` | Node.js | Synchronous loading from package directory |
+| `fromBytes(bytes)` | Both | Load from raw WASM bytes (`ArrayBuffer` or `Uint8Array`) |
+| `fromBase64(base64)` | Both | Load from a base64-encoded WASM string |
+| `getResultMessage(code)` | Both | Get human-readable description for a result code |
 
 ### Instance Methods
 
@@ -121,19 +146,31 @@ if (result === ReedSolomonErasure.RESULT_OK) {
 | `RESULT_ERROR_TOO_FEW_SHARDS_PRESENT` | 10 | Not enough valid shards for reconstruction |
 | ... | ... | See source for all error codes |
 
+## Package Exports
+
+The package provides multiple build formats:
+
+| Entry | Format | Environment | `fs` dependency |
+|-------|--------|-------------|----------------|
+| `@digitaldefiance/reed-solomon-erasure.wasm` | CJS/ESM | Auto (browser condition) | No (browser) / Yes (Node) |
+| `@digitaldefiance/reed-solomon-erasure.wasm/browser` | CJS/ESM | Browser only | No |
+| `@digitaldefiance/reed-solomon-erasure.wasm/wasm` | Binary | Both | N/A |
+
+Bundlers that support the `"browser"` exports condition (Vite, Webpack 5, Rollup, esbuild) will automatically use the browser build when targeting browser environments.
+
 ## Building from Source
 
 Requires [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) for WASM compilation.
 
 ```bash
 # Install dependencies
-npm install
+yarn install
 
 # Build (uses pre-compiled WASM)
-npm run build
+yarn build
 
 # Full build including WASM compilation
-npm run build:full
+yarn build:full
 ```
 
 ## License
