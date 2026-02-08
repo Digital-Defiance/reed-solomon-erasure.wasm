@@ -4,8 +4,9 @@
     "module": "ESNext",
     "outDir": "dist",
     "declaration": false,
-    "declarationMap": false
+    "declarationMap": false,
+    "sourceMap": true
   },
-  "include": ["src/index.ts"],
+  "include": ["src/index.ts", "src/browser.ts"],
   "exclude": ["node_modules", "dist", "browser", "tests"]
 }

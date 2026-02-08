@@ -1,6 +1,6 @@
 {
   "name": "@digitaldefiance/reed-solomon-erasure.wasm",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Reed-Solomon erasure coding compiled to WebAssembly - browser and Node.js compatible",
   "author": "Digital Defiance",
   "license": "MIT",
@@ -29,21 +29,31 @@
     "dist",
     "browser"
   ],
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
-  "browser": "browser/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "browser": "./dist/browser.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "browser": "./browser/index.js",
+      "browser": {
+        "import": "./dist/browser.mjs",
+        "require": "./dist/browser.js",
+        "default": "./dist/browser.mjs"
+      },
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./browser": {
-      "types": "./dist/index.d.ts",
-      "import": "./browser/index.mjs",
-      "require": "./browser/index.js"
+      "types": "./dist/browser.d.ts",
+      "import": {
+        "default": "./dist/browser.mjs"
+      },
+      "require": {
+        "default": "./dist/browser.js"
+      },
+      "default": "./dist/browser.js"
     },
     "./wasm": "./dist/reed_solomon_erasure_bg.wasm"
   },
@@ -52,9 +62,9 @@
     "clean": "rm -rf dist browser",
     "compile-wasm": "wasm-pack build --release --out-dir wasm-build && cp wasm-build/reed_solomon_erasure_bg.wasm src/ && rm -rf wasm-build",
     "compile:cjs": "tsc -p tsconfig.json",
-    "compile:esm": "tsc -p tsconfig.esm.json",
+    "compile:esm": "tsc -p tsconfig.esm.json && mv dist/index.js dist/index.mjs && mv dist/index.js.map dist/index.mjs.map && mv dist/browser.js dist/browser.mjs && mv dist/browser.js.map dist/browser.mjs.map",
     "compile:browser": "tsc -p tsconfig.browser.json",
-    "compile": "yarn compile:cjs && yarn compile:esm && yarn compile:browser",
+    "compile": "yarn compile:esm && yarn compile:cjs && yarn compile:browser",
     "copy-wasm": "cp src/*.wasm dist/ && cp src/*.wasm browser/",
     "build": "yarn clean && yarn compile && yarn copy-wasm",
     "build:full": "yarn clean && yarn compile-wasm && yarn compile && yarn copy-wasm",

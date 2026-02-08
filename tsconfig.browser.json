@@ -5,6 +5,7 @@
     "outDir": "browser",
     "declaration": false,
     "declarationMap": false,
+    "sourceMap": true,
     "types": []
   },
   "include": ["src/browser.ts"],
